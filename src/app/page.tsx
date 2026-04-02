@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Canvas } from "@react-three/fiber";
-import { Stars, OrbitControls, Float, MeshDistortMaterial } from "@react-three/drei";
-import { AlertCircle, Volume2, VolumeX, Terminal } from "lucide-react";
+import { Stars, Float, MeshDistortMaterial } from "@react-three/drei";
+import { AlertCircle, Volume2, VolumeX, Terminal, Cpu } from "lucide-react";
+import { Howl } from "howler";
 
 // --- Types ---
 interface Obstacle {
@@ -25,13 +26,13 @@ interface Fragment {
 const Background = () => {
   return (
     <div className="fixed inset-0 z-[-1] bg-[#0a0a0c]">
-      <Canvas>
+      <Canvas camera={{ position: [0, 0, 5], fov: 75 }}>
         <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
         <ambientLight intensity={0.5} />
         <pointLight position={[10, 10, 10]} />
         <Float speed={2} rotationIntensity={1} floatIntensity={1}>
           <mesh position={[0, 0, -5]}>
-            <sphereGeometry args={[2, 64, 64]} />
+            <sphereGeometry args={[2.5, 64, 64]} />
             <MeshDistortMaterial color="#1e3a8a" speed={3} distort={0.4} />
           </mesh>
         </Float>
@@ -48,9 +49,16 @@ const CustomCursor = ({ position }: { position: { x: number; y: number } }) => {
       transition={{ type: "spring", damping: 20, stiffness: 400, mass: 0.1 }}
     >
       <div className="relative w-full h-full flex items-center justify-center">
-        <div className="absolute w-full h-full border-2 border-white rounded-full opacity-50 animate-ping" />
-        <div className="absolute w-full h-full border-2 border-blue-400 rounded-full" />
-        <div className="w-2 h-2 bg-blue-500 rounded-full shadow-[0_0_10px_#3b82f6]" />
+        <div className="absolute w-full h-full border-2 border-white rounded-full opacity-30 animate-ping" />
+        <div className="absolute w-full h-full border border-blue-400 rounded-full" />
+        <div className="w-1.5 h-1.5 bg-blue-500 rounded-full shadow-[0_0_15px_#3b82f6]" />
+        
+        {/* Orbits */}
+        <motion.div 
+            className="absolute w-12 h-12 border border-white/10 rounded-full" 
+            animate={{ rotate: 360 }}
+            transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+        />
       </div>
     </motion.div>
   );
@@ -64,6 +72,41 @@ export default function Game() {
   const [fragments, setFragments] = useState<Fragment[]>([]);
   const [isMuted, setIsMuted] = useState(false);
   const [isGlitching, setIsGlitching] = useState(false);
+  
+  const sounds = useRef<{
+    collect: Howl | null;
+    crash: Howl | null;
+    bg: Howl | null;
+  }>({ collect: null, crash: null, bg: null });
+
+  // Initialize Audio
+  useEffect(() => {
+    sounds.current.collect = new Howl({
+      src: ['https://assets.mixkit.co/active_storage/sfx/2568/2568-preview.mp3'], // Digital chime
+      volume: 0.5
+    });
+    sounds.current.crash = new Howl({
+      src: ['https://assets.mixkit.co/active_storage/sfx/2641/2641-preview.mp3'], // Glitch/Error
+      volume: 0.7
+    });
+    sounds.current.bg = new Howl({
+      src: ['https://assets.mixkit.co/active_storage/sfx/123/123-preview.mp3'], // Low hum/drone
+      loop: true,
+      volume: 0.2
+    });
+
+    sounds.current.bg.play();
+
+    return () => {
+      sounds.current.bg?.stop();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (sounds.current.bg) {
+      sounds.current.bg.mute(isMuted || isGameOver);
+    }
+  }, [isMuted, isGameOver]);
 
   // Mouse Movement
   useEffect(() => {
@@ -80,30 +123,30 @@ export default function Game() {
 
     const obstacleInterval = setInterval(() => {
       setObstacles((prev) => [
-        ...prev.slice(-10),
+        ...prev.slice(-15),
         {
           id: Date.now(),
           x: Math.random() * window.innerWidth,
-          y: -50,
-          size: 20 + Math.random() * 40,
+          y: -100,
+          size: 30 + Math.random() * 50,
         },
       ]);
-    }, 1000);
+    }, 800);
 
     const fragmentInterval = setInterval(() => {
       setFragments((prev) => [
-        ...prev.slice(-5),
+        ...prev.slice(-8),
         {
           id: Date.now(),
-          x: Math.random() * window.innerWidth,
-          y: Math.random() * window.innerHeight,
+          x: Math.random() * (window.innerWidth - 100) + 50,
+          y: Math.random() * (window.innerHeight - 100) + 50,
         },
       ]);
-    }, 2000);
+    }, 1500);
 
     const movementInterval = setInterval(() => {
       setObstacles((prev) =>
-        prev.map((o) => ({ ...o, y: o.y + 5 })).filter((o) => o.y < window.innerHeight + 50)
+        prev.map((o) => ({ ...o, y: o.y + (5 + score / 5000) })).filter((o) => o.y < window.innerHeight + 100)
       );
     }, 16);
 
@@ -112,18 +155,18 @@ export default function Game() {
       clearInterval(fragmentInterval);
       clearInterval(movementInterval);
     };
-  }, [isGameOver]);
+  }, [isGameOver, score]);
 
   // Collision Detection
   useEffect(() => {
-    if (isGameOver) return;
+    if (isGameOver || isGlitching) return;
 
     // Hit obstacles
     obstacles.forEach((o) => {
       const dx = mousePos.x - o.x;
       const dy = mousePos.y - o.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
-      if (distance < o.size / 2 + 10) {
+      if (distance < o.size / 2 + 8) {
         handleGameOver();
       }
     });
@@ -133,49 +176,64 @@ export default function Game() {
       const dx = mousePos.x - f.x;
       const dy = mousePos.y - f.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
-      if (distance < 30) {
-        setScore((s) => s + 100);
+      if (distance < 25) {
+        setScore((s) => s + 250);
+        sounds.current.collect?.play();
         setFragments((prev) => prev.filter((item) => item.id !== f.id));
       }
     });
-  }, [mousePos, obstacles, fragments, isGameOver]);
+  }, [mousePos, obstacles, fragments, isGameOver, isGlitching]);
 
   const handleGameOver = () => {
     setIsGlitching(true);
+    sounds.current.crash?.play();
     setTimeout(() => {
       setIsGameOver(true);
       setIsGlitching(false);
-    }, 1500);
+    }, 2000);
   };
 
   if (isGameOver) {
     return (
       <div className="fixed inset-0 bg-black flex flex-col items-center justify-center font-mono p-8 overflow-hidden">
-        <div className="w-full max-w-2xl border border-green-900 bg-black/50 p-6 rounded shadow-[0_0_20px_#14532d]">
-          <div className="flex items-center gap-2 text-green-500 mb-4 animate-pulse">
-            <AlertCircle size={20} />
-            <span>SYSTEM_CRITICAL_FAILURE</span>
+        <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full max-w-2xl border border-green-900 bg-black/80 p-8 rounded shadow-[0_0_40px_rgba(20,83,45,0.3)] z-10"
+        >
+          <div className="flex items-center gap-3 text-green-500 mb-6">
+            <AlertCircle size={24} className="animate-pulse" />
+            <span className="text-xl tracking-[0.2em] font-bold">SYSTEM_KERNEL_PANIC</span>
           </div>
-          <div className="text-green-400 space-y-2 text-sm md:text-base">
-            <p>CORE_INTEGRITY: 0.00%</p>
-            <p>MEM_DUMP: FATAL_EXCEPTION_AT_0x004F3B</p>
-            <p>DATA_NODES_CAPTURED: {score}</p>
-            <p className="mt-8 text-xs opacity-50">
-              [SYSTEM_HALTED] - PLEASE REBOOT ENVIRONMENT (REFRESH) TO RESTORE NEURAL LINK.
+          <div className="text-green-400 space-y-4 text-sm md:text-base leading-relaxed border-t border-green-900/50 pt-6">
+            <div className="grid grid-cols-2 gap-4">
+               <div>CORE_STATUS: <span className="text-red-900 bg-red-500/10 px-1 font-bold">TERMINATED</span></div>
+               <div>RECOVERY: <span className="opacity-50">IMPOSSIBLE</span></div>
+            </div>
+            <p>DIAGNOSTIC: UNRECOVERABLE_COLLISION_DETECTED</p>
+            <p className="text-2xl font-bold mt-4 text-green-300">
+               NODES_RETRIEVED: {score.toLocaleString()}
             </p>
+            <div className="mt-12 p-4 bg-green-950/20 border border-green-900/30 rounded">
+               <p className="text-xs opacity-60">
+                [LOG] CONNECTION LOST. NEURAL LINK DISCONNECTED. 
+                <br/>[ACTION] PLEASE RE-INITIALIZE MANUALLY VIA BROWSER REFRESH.
+               </p>
+            </div>
           </div>
-        </div>
-        {/* Matrix-like rain effect could go here */}
-        <div className="absolute inset-0 pointer-events-none opacity-20">
-          {[...Array(20)].map((_, i) => (
+        </motion.div>
+        
+        {/* Glitchy Code Rain */}
+        <div className="absolute inset-0 pointer-events-none opacity-10">
+          {[...Array(40)].map((_, i) => (
             <motion.div
               key={i}
-              className="absolute top-0 text-green-500 text-[10px]"
-              initial={{ y: -100, x: `${Math.random() * 100}%` }}
-              animate={{ y: "100vh" }}
-              transition={{ duration: 2 + Math.random() * 5, repeat: Infinity, ease: "linear" }}
+              className="absolute top-0 text-green-500 text-[8px] font-bold"
+              initial={{ y: -200, x: `${Math.random() * 100}%` }}
+              animate={{ y: "110vh" }}
+              transition={{ duration: 1.5 + Math.random() * 4, repeat: Infinity, ease: "linear" }}
             >
-              {Math.random().toString(2).substring(2, 10)}
+              {Math.random().toString(36).substring(2, 15).toUpperCase()}
             </motion.div>
           ))}
         </div>
@@ -184,24 +242,27 @@ export default function Game() {
   }
 
   return (
-    <div className={`fixed inset-0 cursor-none select-none transition-colors duration-[1500ms] ${isGlitching ? 'bg-black opacity-50' : ''}`}>
+    <div className={`fixed inset-0 cursor-none select-none transition-all duration-[2000ms] overflow-hidden ${isGlitching ? 'grayscale contrast-[2] scale-110' : ''}`}>
       <Background />
       <CustomCursor position={mousePos} />
 
       {/* UI Elements */}
-      <div className="absolute top-8 left-8 text-white font-mono flex flex-col gap-2">
-        <div className="text-xs text-blue-400 opacity-70">SENSING_CORE_PROTOCOL</div>
-        <div className="text-3xl font-bold tracking-tighter shadow-blue-500">
-          SCORE: {score.toString().padStart(6, "0")}
+      <div className="absolute top-10 left-10 text-white font-mono flex flex-col gap-1 pointer-events-none">
+        <div className="flex items-center gap-2 text-[10px] text-blue-400 opacity-60 tracking-[0.3em]">
+            <Cpu size={12} />
+            NEURAL_CORE_LINK [ACTIVE]
+        </div>
+        <div className="text-5xl font-black tracking-tighter text-white drop-shadow-[0_0_15px_rgba(59,130,246,0.5)] italic">
+          {score.toString().padStart(6, "0")}
         </div>
       </div>
 
-      <div className="absolute top-8 right-8 flex gap-4 items-center">
+      <div className="absolute top-10 right-10 flex gap-4 items-center z-[200]">
         <button 
           onClick={() => setIsMuted(!isMuted)}
-          className="p-2 border border-white/20 rounded-full hover:bg-white/10 transition-colors text-white"
+          className="p-3 border border-white/10 rounded-full hover:bg-white/10 transition-all text-white backdrop-blur-md"
         >
-          {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+          {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
         </button>
       </div>
 
@@ -210,20 +271,20 @@ export default function Game() {
         {obstacles.map((o) => (
           <motion.div
             key={o.id}
-            initial={{ opacity: 0, scale: 0 }}
-            animate={{ opacity: 1, scale: 1, y: o.y }}
-            exit={{ opacity: 0, scale: 2 }}
-            className="absolute rounded-lg border border-white/30 bg-white/5 backdrop-blur-sm pointer-events-none"
+            initial={{ opacity: 0, scale: 0.5, rotate: 0 }}
+            animate={{ opacity: 1, scale: 1, y: o.y, rotate: o.id % 360 }}
+            exit={{ opacity: 0, scale: 1.5 }}
+            className="absolute border-t border-l border-white/40 bg-white/5 backdrop-blur-[2px] pointer-events-none"
             style={{
               left: o.x - o.size / 2,
               top: 0,
               width: o.size,
               height: o.size,
-              rotate: o.id % 360,
+              clipPath: 'polygon(20% 0%, 80% 0%, 100% 100%, 0% 100%)'
             }}
           >
-             <div className="w-full h-full flex items-center justify-center">
-                <div className="w-1/2 h-1/2 border border-white/20" />
+             <div className="w-full h-full flex items-center justify-center opacity-20">
+                <div className="w-2/3 h-2/3 border border-white/50 rotate-45" />
              </div>
           </motion.div>
         ))}
@@ -231,15 +292,15 @@ export default function Game() {
         {fragments.map((f) => (
           <motion.div
             key={f.id}
-            initial={{ opacity: 0, scale: 0 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 2 }}
+            initial={{ opacity: 0, scale: 0, rotate: -45 }}
+            animate={{ opacity: 1, scale: 1, rotate: 45 }}
+            exit={{ opacity: 0, scale: 3, filter: 'blur(10px)' }}
             className="absolute pointer-events-none"
-            style={{ left: f.x - 15, top: f.y - 15 }}
+            style={{ left: f.x - 20, top: f.y - 20 }}
           >
-            <div className="relative w-[30px] h-[30px] flex items-center justify-center">
-               <div className="absolute inset-0 bg-blue-500/20 rounded-full blur-md animate-pulse" />
-               <Terminal className="text-blue-400" size={16} />
+            <div className="relative w-[40px] h-[40px] flex items-center justify-center">
+               <div className="absolute inset-0 bg-blue-500/30 rounded shadow-[0_0_20px_#3b82f6] animate-pulse" />
+               <Terminal className="text-white drop-shadow-lg" size={20} />
             </div>
           </motion.div>
         ))}
@@ -247,24 +308,36 @@ export default function Game() {
 
       {/* Glitch Overlay */}
       {isGlitching && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: [0, 1, 0, 1, 0, 1] }}
-          className="fixed inset-0 z-[200] bg-white mix-blend-difference pointer-events-none"
-        />
+        <div className="fixed inset-0 z-[300] pointer-events-none">
+            <motion.div
+                animate={{ opacity: [0, 0.5, 0, 0.8, 0.2, 1] }}
+                transition={{ duration: 0.2, repeat: Infinity }}
+                className="absolute inset-0 bg-red-500/20 mix-blend-overlay"
+            />
+            <motion.div
+                animate={{ x: [-10, 10, -5, 5, 0] }}
+                transition={{ duration: 0.1, repeat: Infinity }}
+                className="absolute inset-0 border-[20px] border-white/10"
+            />
+        </div>
       )}
 
+      {/* Scanner Lines */}
+      <div className="fixed inset-0 pointer-events-none opacity-[0.03] bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%]" />
+
       {/* Instructions */}
-      {score === 0 && !isGameOver && (
-        <motion.div 
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed bottom-12 left-1/2 -translate-x-1/2 text-white/50 font-mono text-xs tracking-widest uppercase"
-        >
-          Navigate Core • Harvest Fragments • Avoid Shards
-        </motion.div>
-      )}
+      <AnimatePresence>
+        {score < 500 && !isGameOver && (
+            <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed bottom-16 left-1/2 -translate-x-1/2 text-white/40 font-mono text-[10px] tracking-[0.5em] uppercase text-center"
+            >
+            <span className="text-blue-400">Warning:</span> Avoid Shards • <span className="text-blue-400">Task:</span> Collect Data Fragments
+            </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
